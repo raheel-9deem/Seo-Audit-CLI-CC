@@ -5,4 +5,4 @@ for common search engine optimization factors such as meta tags, headings,
 links, images, and content structure.
 """
 
-__version__ = "0.1.0"
+__version__ = "2.0.0"
