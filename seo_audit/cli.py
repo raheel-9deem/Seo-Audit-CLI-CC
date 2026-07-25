@@ -8,8 +8,13 @@ Usage:
     python -m seo_audit.cli <url> [options]
 
 Options:
-    --output FILE      Write the markdown report to a file.
+    --output FILE      Write the report to a file.
+    --format FORMAT    Output format: terminal, markdown, json, csv, html (default: terminal).
     --no-links         Skip broken link checking (faster scan).
+    --wordpress        Run WordPress detection and security checks.
+    --save-history     Save scan results to the local history database.
+    --compare          Show a diff against the last scan of the same URL.
+    --db-path PATH     Path to the history database (default: .seo_audit_history.db).
     --timeout SECONDS  Request timeout (default 10).
     --version          Show the version and exit.
 """
@@ -19,8 +24,10 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .checks import ALL_CHECKS, URL_CHECKS, check_broken_links, check_links
+from .history import compare_with_previous, init_db, save_scan
 from .report import print_report
 from .scraper import fetch_page, parse_html
+from .wordpress import check_wp_exposures, detect_wordpress, get_wp_version
 
 
 def normalize_url(url):
@@ -57,12 +64,39 @@ def create_parser():
     parser.add_argument(
         "--output",
         metavar="FILE",
-        help="Write the markdown report to a file instead of stdout.",
+        help="Write the report to a file instead of stdout.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["terminal", "markdown", "json", "csv", "html"],
+        default="terminal",
+        help="Output format (default: terminal).",
     )
     parser.add_argument(
         "--no-links",
         action="store_true",
         help="Skip broken link checking for a faster scan.",
+    )
+    parser.add_argument(
+        "--wordpress",
+        action="store_true",
+        help="Run WordPress detection and security checks.",
+    )
+    parser.add_argument(
+        "--save-history",
+        action="store_true",
+        help="Save scan results to the local history database.",
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Show a diff against the last scan of the same URL.",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=".seo_audit_history.db",
+        metavar="PATH",
+        help="Path to the history database (default: .seo_audit_history.db).",
     )
     parser.add_argument(
         "--timeout",
@@ -170,8 +204,73 @@ def main():
                         "details": {"checked": len(all_links)},
                     })
 
+        # Optionally run WordPress checks — auto-detect or forced via --wordpress.
+        is_wordpress = detect_wordpress(final_url, html)
+        if is_wordpress or args.wordpress:
+            wp_version = get_wp_version(html)
+            if wp_version:
+                results.append({
+                    "name": "WordPress Version",
+                    "status": "pass",
+                    "message": f"WordPress version detected: {wp_version}.",
+                    "details": {"version": wp_version},
+                })
+            else:
+                results.append({
+                    "name": "WordPress Version",
+                    "status": "warning",
+                    "message": "WordPress detected but version could not be determined.",
+                    "details": {},
+                })
+
+            wp_exposures = check_wp_exposures(final_url)
+            results.append(wp_exposures)
+
+        # Optionally compare with previous scan.
+        if args.compare:
+            init_db(args.db_path)
+            diff = compare_with_previous(args.db_path, final_url, results)
+            if diff["no_previous"]:
+                results.append({
+                    "name": "History Comparison",
+                    "status": "pass",
+                    "message": "No previous scan found for this URL. This scan will be saved as the baseline.",
+                    "details": {},
+                })
+            else:
+                improved_count = len(diff["improved"])
+                worsened_count = len(diff["worsened"])
+                unchanged_count = len(diff["unchanged"])
+                if diff["previous_score"] is not None:
+                    score_delta = diff["current_score"] - diff["previous_score"]
+                    if score_delta > 0:
+                        score_msg = f"Score improved by {score_delta} points ({diff['previous_score']} → {diff['current_score']})."
+                    elif score_delta < 0:
+                        score_msg = f"Score dropped by {abs(score_delta)} points ({diff['previous_score']} → {diff['current_score']})."
+                    else:
+                        score_msg = f"Score unchanged at {diff['current_score']}."
+                else:
+                    score_msg = ""
+                results.append({
+                    "name": "History Comparison",
+                    "status": "warning" if worsened_count > 0 else "pass",
+                    "message": f"Compared to scan on {diff['previous_date']}: {improved_count} improved, {worsened_count} worsened, {unchanged_count} unchanged. {score_msg}".strip(),
+                    "details": {
+                        "improved": diff["improved"],
+                        "worsened": diff["worsened"],
+                        "unchanged": diff["unchanged"],
+                        "previous_score": diff["previous_score"],
+                        "current_score": diff["current_score"],
+                    },
+                })
+
+        # Optionally save to history.
+        if args.save_history:
+            init_db(args.db_path)
+            save_scan(args.db_path, final_url, results)
+
         # Generate and print the report.
-        print_report(results, final_url, fmt="markdown", output=args.output)
+        print_report(results, final_url, fmt=args.format, output=args.output)
 
     except KeyboardInterrupt:
         print("\nAborted by user.", file=sys.stderr)
