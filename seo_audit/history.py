@@ -98,7 +98,7 @@ def compare_with_previous(db_path, url, current_results):
     cursor = conn.cursor()
     cursor.execute(
         "SELECT scan_date, overall_score, results_json FROM scans "
-        "WHERE url = ? ORDER BY scan_date DESC LIMIT 1 OFFSET 1",
+        "WHERE url = ? ORDER BY scan_date DESC LIMIT 1",
         (url,),
     )
     row = cursor.fetchone()

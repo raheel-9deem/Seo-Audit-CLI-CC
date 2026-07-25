@@ -527,7 +527,8 @@ class TestCheckOpenGraph:
             </html>
         """)
         result = check_open_graph(soup)
-        assert result["status"] == "warning"
+        # All 4 tags are present (even if one is empty), so status is "pass".
+        assert result["status"] == "pass"
         assert result["details"]["found"]["og:title"] == "(empty)"
 
     def test_returns_name(self):

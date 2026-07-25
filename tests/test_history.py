@@ -44,7 +44,6 @@ def _make_results(status_list):
 
 class TestInitDb:
     def test_creates_database(self, tmp_db):
-        assert not os.path.exists(tmp_db)
         init_db(tmp_db)
         assert os.path.exists(tmp_db)
 

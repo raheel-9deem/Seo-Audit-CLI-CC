@@ -4,6 +4,7 @@ Run with: pytest tests/test_crawler.py -v
 """
 
 import pytest
+import requests
 from unittest.mock import patch, MagicMock
 
 from seo_audit.crawler import crawl_site
@@ -15,6 +16,7 @@ class MockResponse:
     def __init__(self, url, html, status_code=200, links=None):
         self.url = url
         self.html = html
+        self.text = html  # crawler expects .text attribute
         self.status_code = status_code
         self.links = links or []
         self.headers = {"Content-Type": "text/html"}
@@ -188,11 +190,10 @@ class TestCrawlSite:
     def test_handles_404_gracefully(self, mock_get):
         """Crawler should skip pages that return 404."""
         home_html = _make_page_html("Home", [("/missing", "Missing")])
-        mock_404 = MockResponse("https://example.com/missing", "", status_code=404)
 
         def _response(url, **kwargs):
             if "missing" in url:
-                mock_404.raise_for_status()
+                raise requests.HTTPError(f"HTTP 404")
             return MockResponse(url, home_html)
 
         mock_get.side_effect = _response

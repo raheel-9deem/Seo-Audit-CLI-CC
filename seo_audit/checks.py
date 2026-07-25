@@ -258,7 +258,10 @@ def check_word_count(soup):
         - pass: 300 words or more.
     """
     # Work on a copy so we don't mutate the original soup for other checks.
-    soup_copy = BeautifulSoup(str(soup), "lxml")
+    try:
+        soup_copy = BeautifulSoup(str(soup), "lxml")
+    except Exception:
+        soup_copy = BeautifulSoup(str(soup), "html.parser")
     for tag in soup_copy(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
 

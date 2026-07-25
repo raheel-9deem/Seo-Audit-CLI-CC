@@ -89,8 +89,12 @@ def parse_html(html):
 
     Returns:
         A BeautifulSoup object parsed with the lxml parser, or None
-        if the html is empty or None.
+        if the html is empty or None. Falls back to html.parser if
+        lxml is not installed.
     """
     if not html or not html.strip():
         return None
-    return BeautifulSoup(html, "lxml")
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
