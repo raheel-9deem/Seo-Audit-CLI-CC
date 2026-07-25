@@ -18,7 +18,7 @@ import sys
 from urllib.parse import urlparse
 
 from . import __version__
-from .checks import ALL_CHECKS, check_broken_links, check_links
+from .checks import ALL_CHECKS, URL_CHECKS, check_broken_links, check_links
 from .report import print_report
 from .scraper import fetch_page, parse_html
 
@@ -114,7 +114,7 @@ def main():
             print("Error: The page returned empty or unparseable content.", file=sys.stderr)
             sys.exit(1)
 
-        # Run all standard checks.
+        # Run all standard checks (soup-based).
         results = []
         for check_fn in ALL_CHECKS:
             try:
@@ -122,6 +122,19 @@ def main():
                     result = check_fn(soup, final_url)
                 else:
                     result = check_fn(soup)
+                results.append(result)
+            except Exception as exc:
+                results.append({
+                    "name": getattr(check_fn, "__name__", "unknown"),
+                    "status": "fail",
+                    "message": f"Check error: {exc}",
+                    "details": {},
+                })
+
+        # Run URL-based checks (require base_url, not soup).
+        for check_fn in URL_CHECKS:
+            try:
+                result = check_fn(final_url)
                 results.append(result)
             except Exception as exc:
                 results.append({
