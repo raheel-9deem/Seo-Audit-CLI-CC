@@ -253,7 +253,7 @@ pytest tests/ -v
 
 ## Credits
 
-Made with Love, By Raheel Nadeem.
+Made with 🤍, By Raheel Nadeem.
 
 ## License
 

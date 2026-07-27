@@ -350,7 +350,7 @@ def main():
 
             # WordPress checks.
             is_wordpress = detect_wordpress(final_url, html)
-            if is_wordpress or args.wordpress:
+            if args.wordpress or is_wordpress:
                 wp_version = get_wp_version(html)
                 if wp_version:
                     results.append({

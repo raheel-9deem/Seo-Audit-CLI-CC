@@ -30,7 +30,7 @@ def _is_internal(href, base_domain):
     parsed = urlparse(href)
     if not parsed.scheme:
         return True  # Relative URL is internal.
-    return parsed.netloc == base_domain or parsed.netloc.startswith(base_domain)
+    return parsed.netloc == base_domain
 
 
 def _normalize(url):
@@ -87,7 +87,10 @@ def crawl_site(start_url, max_pages=20, max_depth=2, timeout=10):
             continue
 
         html = response.text
-        soup = BeautifulSoup(html, "lxml")
+        try:
+            soup = BeautifulSoup(html, "lxml")
+        except Exception:
+            soup = BeautifulSoup(html, "html.parser")
 
         results.append({
             "url": url,
