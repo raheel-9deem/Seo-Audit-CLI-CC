@@ -24,6 +24,10 @@ import sys
 from datetime import datetime
 from urllib.parse import urlparse
 
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.status import Status
+
 from . import __version__
 from .checks import ALL_CHECKS, URL_CHECKS, check_broken_links, check_links
 from .config import load_config
@@ -163,10 +167,41 @@ def main():
         print(f"Error: '{args.url}' is not a valid URL.", file=sys.stderr)
         sys.exit(1)
 
+    # Determine if output is going to a terminal or file; disable rich when piping/file output.
+    output_is_file = args.output is not None or not sys.stdout.isatty()
+
     try:
         if args.crawl:
             # Crawl mode: crawl the site and audit all discovered pages.
-            pages = crawl_site(url, max_pages=args.max_pages, max_depth=args.max_depth, timeout=args.timeout)
+            if output_is_file:
+                pages = crawl_site(url, max_pages=args.max_pages, max_depth=args.max_depth, timeout=args.timeout)
+            else:
+                from rich.console import Console
+                from rich.progress import Progress, SpinnerColumn, TextColumn
+                console = Console()
+                with Progress(
+                    SpinnerColumn(),
+                    "[progress.description]{task.description}",
+                    "[progress.percentage]{task.percentage:>3.0f}%",
+                    console=console,
+                ) as progress:
+                    crawl_task = progress.add_task("Crawling...", total=args.max_pages)
+
+                    def crawl_callback(event):
+                        if event.get("event") == "fetched":
+                            progress.update(
+                                crawl_task,
+                                advance=1,
+                                description=f"Fetched: {event.get('url', '?')}  Discovered: {event.get('pages_discovered', 0)}  Queue: {event.get('queue_remaining', 0)}",
+                            )
+                        elif event.get("event") == "discovered":
+                            progress.update(
+                                crawl_task,
+                                description=f"Discovered: {event.get('url', '?')}  Queue remaining: {event.get('queue_remaining', 0)}",
+                            )
+
+                    pages = crawl_site(url, max_pages=args.max_pages, max_depth=args.max_depth, timeout=args.timeout, progress_callback=crawl_callback)
+
             if not pages:
                 print("Error: No pages were discovered during crawling.", file=sys.stderr)
                 sys.exit(1)
@@ -295,80 +330,155 @@ def main():
                 sys.exit(1)
 
             results = []
-            for check_fn in ALL_CHECKS:
-                try:
-                    if check_fn is check_links:
-                        result = check_fn(soup, final_url)
-                    else:
-                        result = check_fn(soup)
-                    results.append(result)
-                except Exception as exc:
-                    results.append({
-                        "name": getattr(check_fn, "__name__", "unknown"),
-                        "status": "fail",
-                        "message": f"Check error: {exc}",
-                        "details": {},
-                    })
-
-            # URL-based checks.
-            for check_fn in URL_CHECKS:
-                try:
-                    result = check_fn(final_url)
-                    results.append(result)
-                except Exception as exc:
-                    results.append({
-                        "name": getattr(check_fn, "__name__", "unknown"),
-                        "status": "fail",
-                        "message": f"Check error: {exc}",
-                        "details": {},
-                    })
-
-            # Broken link checking.
-            if not args.no_links:
-                all_links = []
-                for a in soup.find_all("a", href=True):
-                    href = a["href"].strip()
-                    if href.startswith(("http://", "https://")):
-                        all_links.append(href)
-
-                if all_links:
-                    broken = check_broken_links(all_links)
-                    if broken:
+            if not output_is_file:
+                from rich.console import Console
+                from rich.status import Status
+                console = Console()
+                with Status("Running SEO checks...", console=console, spinner="dots") as status:
+                    for check_fn in ALL_CHECKS:
+                        status.update(f"Checking: {getattr(check_fn, '__name__', 'unknown')}...")
+                        try:
+                            if check_fn is check_links:
+                                result = check_fn(soup, final_url)
+                            else:
+                                result = check_fn(soup)
+                            results.append(result)
+                        except Exception as exc:
+                            results.append({
+                                "name": getattr(check_fn, "__name__", "unknown"),
+                                "status": "fail",
+                                "message": f"Check error: {exc}",
+                                "details": {},
+                            })
+                    status.update("Checking: URL-based checks...")
+                    for check_fn in URL_CHECKS:
+                        try:
+                            result = check_fn(final_url)
+                            results.append(result)
+                        except Exception as exc:
+                            results.append({
+                                "name": getattr(check_fn, "__name__", "unknown"),
+                                "status": "fail",
+                                "message": f"Check error: {exc}",
+                                "details": {},
+                            })
+                    if not args.no_links:
+                        status.update("Checking broken links...")
+                        all_links = []
+                        for a in soup.find_all("a", href=True):
+                            href = a["href"].strip()
+                            if href.startswith(("http://", "https://")):
+                                all_links.append(href)
+                        if all_links:
+                            broken = check_broken_links(all_links)
+                            if broken:
+                                results.append({
+                                    "name": "Broken Links",
+                                    "status": "fail",
+                                    "message": f"{len(broken)} broken link(s) found.",
+                                    "details": {"broken": broken[:10]},
+                                })
+                            else:
+                                results.append({
+                                    "name": "Broken Links",
+                                    "status": "pass",
+                                    "message": f"All {len(all_links)} links are reachable.",
+                                    "details": {"checked": len(all_links)},
+                                })
+                    if args.wordpress or (is_wordpress := detect_wordpress(final_url, html)):
+                        status.update("Checking WordPress info...")
+                        wp_version = get_wp_version(html)
+                        if wp_version:
+                            results.append({
+                                "name": "WordPress Version",
+                                "status": "pass",
+                                "message": f"WordPress version detected: {wp_version}.",
+                                "details": {"version": wp_version},
+                            })
+                        else:
+                            results.append({
+                                "name": "WordPress Version",
+                                "status": "warning",
+                                "message": "WordPress detected but version could not be determined.",
+                                "details": {},
+                            })
+                        wp_exposures = check_wp_exposures(final_url)
+                        results.append(wp_exposures)
+            else:
+                for check_fn in ALL_CHECKS:
+                    try:
+                        if check_fn is check_links:
+                            result = check_fn(soup, final_url)
+                        else:
+                            result = check_fn(soup)
+                        results.append(result)
+                    except Exception as exc:
                         results.append({
-                            "name": "Broken Links",
+                            "name": getattr(check_fn, "__name__", "unknown"),
                             "status": "fail",
-                            "message": f"{len(broken)} broken link(s) found.",
-                            "details": {"broken": broken[:10]},
+                            "message": f"Check error: {exc}",
+                            "details": {},
+                        })
+
+                # URL-based checks.
+                for check_fn in URL_CHECKS:
+                    try:
+                        result = check_fn(final_url)
+                        results.append(result)
+                    except Exception as exc:
+                        results.append({
+                            "name": getattr(check_fn, "__name__", "unknown"),
+                            "status": "fail",
+                            "message": f"Check error: {exc}",
+                            "details": {},
+                        })
+
+                # Broken link checking.
+                if not args.no_links:
+                    all_links = []
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"].strip()
+                        if href.startswith(("http://", "https://")):
+                            all_links.append(href)
+
+                    if all_links:
+                        broken = check_broken_links(all_links)
+                        if broken:
+                            results.append({
+                                "name": "Broken Links",
+                                "status": "fail",
+                                "message": f"{len(broken)} broken link(s) found.",
+                                "details": {"broken": broken[:10]},
+                            })
+                        else:
+                            results.append({
+                                "name": "Broken Links",
+                                "status": "pass",
+                                "message": f"All {len(all_links)} links are reachable.",
+                                "details": {"checked": len(all_links)},
+                            })
+
+                # WordPress checks.
+                is_wordpress = detect_wordpress(final_url, html)
+                if args.wordpress or is_wordpress:
+                    wp_version = get_wp_version(html)
+                    if wp_version:
+                        results.append({
+                            "name": "WordPress Version",
+                            "status": "pass",
+                            "message": f"WordPress version detected: {wp_version}.",
+                            "details": {"version": wp_version},
                         })
                     else:
                         results.append({
-                            "name": "Broken Links",
-                            "status": "pass",
-                            "message": f"All {len(all_links)} links are reachable.",
-                            "details": {"checked": len(all_links)},
+                            "name": "WordPress Version",
+                            "status": "warning",
+                            "message": "WordPress detected but version could not be determined.",
+                            "details": {},
                         })
 
-            # WordPress checks.
-            is_wordpress = detect_wordpress(final_url, html)
-            if args.wordpress or is_wordpress:
-                wp_version = get_wp_version(html)
-                if wp_version:
-                    results.append({
-                        "name": "WordPress Version",
-                        "status": "pass",
-                        "message": f"WordPress version detected: {wp_version}.",
-                        "details": {"version": wp_version},
-                    })
-                else:
-                    results.append({
-                        "name": "WordPress Version",
-                        "status": "warning",
-                        "message": "WordPress detected but version could not be determined.",
-                        "details": {},
-                    })
-
-                wp_exposures = check_wp_exposures(final_url)
-                results.append(wp_exposures)
+                    wp_exposures = check_wp_exposures(final_url)
+                    results.append(wp_exposures)
 
             # History comparison.
             if args.compare:

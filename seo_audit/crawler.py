@@ -41,7 +41,7 @@ def _normalize(url):
     return f"{parsed.scheme}://{parsed.netloc}{path}{('?' + parsed.query) if parsed.query else ''}"
 
 
-def crawl_site(start_url, max_pages=20, max_depth=2, timeout=10):
+def crawl_site(start_url, max_pages=20, max_depth=2, timeout=10, progress_callback=None):
     """Crawl a site starting from start_url using BFS.
 
     Args:
@@ -98,6 +98,8 @@ def crawl_site(start_url, max_pages=20, max_depth=2, timeout=10):
             "html": html,
             "soup": soup,
         })
+        if progress_callback:
+            progress_callback({"event": "fetched", "url": url, "pages_discovered": len(results), "queue_remaining": len(queue)})
 
         # Extract links for next level.
         if depth < max_depth:
@@ -114,5 +116,7 @@ def crawl_site(start_url, max_pages=20, max_depth=2, timeout=10):
 
                 if next_normalized not in visited and _is_internal(href, base_domain):
                     queue.append((next_url, depth + 1))
+                    if progress_callback:
+                        progress_callback({"event": "discovered", "url": next_url, "pages_discovered": len(results), "queue_remaining": len(queue)})
 
     return results
